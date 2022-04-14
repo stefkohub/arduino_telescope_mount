@@ -12,8 +12,11 @@
 #include <time.h>
 #include "indi_arduino_gem_driver.h"
 #include "indicom.h"
-const int   POLLMS	 =	250;    			/* poll period, ms */
-std::auto_ptr<ArduinoGEMDriver> arduinoGEMDriver(0);
+
+// const int   POLLMS	=	250;    			/* poll period, ms */
+
+// std::auto_ptr<ArduinoGEMDriver> arduinoGEMDriver(0);
+static std::unique_ptr<ArduinoGEMDriver> arduinoGEMDriver(new ArduinoGEMDriver());
 /**************************************************************************************
 ** Initilize ArduinoGEMDriver object
 ***************************************************************************************/
@@ -76,11 +79,16 @@ void ISSnoopDevice (XMLEle *root) {
 ArduinoGEMDriver::ArduinoGEMDriver() {
 	// We add an additional debug level so we can log verbose scope status
 	DBG_SCOPE = INDI::Logger::getInstance().addDebugLevel("Scope Verbose", "SCOPE");
-	TelescopeCapability cap;
-	cap.canPark = false;
-	cap.canSync = true;
-	cap.canAbort = true;
-	SetTelescopeCapability(&cap);
+	// TelescopeCapability cap;
+	// cap.canPark = false;
+	// cap.canSync = true;
+	// cap.canAbort = true;
+	// SetTelescopeCapability(&cap);
+        SetTelescopeCapability(TELESCOPE_CAN_SYNC | TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT |
+                               TELESCOPE_HAS_TIME | TELESCOPE_HAS_LOCATION | TELESCOPE_HAS_TRACK_MODE | TELESCOPE_CAN_CONTROL_TRACK |
+                               TELESCOPE_HAS_TRACK_RATE,
+                           4);
+        setTelescopeConnection(CONNECTION_SERIAL);
 }
 
 //  INDI initProperties
@@ -91,26 +99,47 @@ bool ArduinoGEMDriver::initProperties() {
 	return true;
 }
 
+bool ArduinoGEMDriver::updateProperties()
+{
+    // updateMountAndPierSide();
+
+    INDI::Telescope::updateProperties();
+    if (isConnected())
+    {
+        defineProperty(&GuideNSNP);
+        defineProperty(&GuideWENP);
+        defineProperty(&GuideRateNP);
+        loadConfig(true, GuideRateNP.name);
+    }
+    else
+    {
+        deleteProperty(GuideNSNP.name);
+        deleteProperty(GuideWENP.name);
+        deleteProperty(GuideRateNP.name);
+    }
+
+    return true;
+}
+
 //  INDI called connect
 bool ArduinoGEMDriver::Connect() {
 	bool rc=false;
 	if(isConnected()) return true;
-	if(Connect(PortT[0].text)) {
+	SetTimer(POLLMS);
+        bool res = INDI::Telescope::Connect();
+	return res;
+
+/*	if(Connect(PortT[0].text)) {
 		SetTimer(POLLMS);
 		return true;
 	}
-	return false;
+	return false;*/
 }
 
 //  Open and ready serial connection to the controller
-bool ArduinoGEMDriver::Connect(const char *port) {
-	int connectrc=0;
+bool ArduinoGEMDriver::Handshake() {
 	char errorMsg[MAXRBUF];
 	bool rc;
-	if ( (connectrc = tty_connect(port, 9600, 8, 0, 1, &PortFD)) != TTY_OK) {
-		tty_error_msg(connectrc, errorMsg, MAXRBUF);
-		return false;
-	}
 	flushSerialBuffer(4); // flush any unwanted startup data from serial port
 	// Test connection
 	if(ACK() == true) {
@@ -205,44 +234,64 @@ bool ArduinoGEMDriver::Abort() {
 }
 
 //  Pulse guiding commands
-bool ArduinoGEMDriver::GuideNorth(float ms) {
+IPState ArduinoGEMDriver::GuideNorth(uint32_t ms) {
 	char command[100];
 	int roundms = (int)ms;
 	snprintf(command, 100, ":EN %i#", roundms);
-	return serialCommand(command, command, false);
+	if (serialCommand(command, command, false)) {
+          return IPS_BUSY;
+	} else {
+          return IPS_ALERT;
+	}
 }
-bool ArduinoGEMDriver::GuideSouth(float ms) {
+IPState ArduinoGEMDriver::GuideSouth(uint32_t ms) {
 	char command[100];
 	int roundms = (int)ms;
 	snprintf(command, 100, ":ES %i#", roundms);
-	return serialCommand(command, command, false);
+	// return serialCommand(command, command, false);
+	if (serialCommand(command, command, false)) {
+          return IPS_BUSY;
+	} else {
+          return IPS_ALERT;
+	}
 }
-bool ArduinoGEMDriver::GuideEast(float ms) {
+IPState ArduinoGEMDriver::GuideEast(uint32_t ms) {
 	char command[100];
 	int roundms = (int)ms;
 	snprintf(command, 100, ":EE %i#", roundms);
-	return serialCommand(command, command, false);
+	// return serialCommand(command, command, false);
+	if (serialCommand(command, command, false)) {
+          return IPS_BUSY;
+	} else {
+          return IPS_ALERT;
+	}
 }
-bool ArduinoGEMDriver::GuideWest(float ms) {
+IPState ArduinoGEMDriver::GuideWest(uint32_t ms) {
 	char command[100];
 	int roundms = (int)ms;
 	snprintf(command, 100, ":EW %i#", roundms);
-	return serialCommand(command, command, false);
+	// return serialCommand(command, command, false);
+	if (serialCommand(command, command, false)) {
+          return IPS_BUSY;
+	} else {
+          return IPS_ALERT;
+	}
 }
 
 //  Move a direction on the DEC axis
 bool ArduinoGEMDriver::MoveNS(TelescopeMotionNS dir, TelescopeMotionCommand command)
 {
-	char command[100];
+	char response[100];
+	char move_command[100];
 	switch (command)
 	{
 		case MOTION_START:
-			if (dir == MOTION_NORTH) {
-				snprintf(command, 100, ":Mn#");
-				return serialCommand(command, command, false);
+			if (dir == DIRECTION_NORTH) {
+				snprintf(move_command, 100, ":Mn#");
+				return serialCommand(move_command, response, false);
 			} else {
-				snprintf(command, 100, ":Ms#");
-				return serialCommand(command, command, false);
+				snprintf(move_command, 100, ":Ms#");
+				return serialCommand(move_command, response, false);
 			}
 			break;
 		case MOTION_STOP:
@@ -255,16 +304,17 @@ bool ArduinoGEMDriver::MoveNS(TelescopeMotionNS dir, TelescopeMotionCommand comm
 //  Move a direction on the RA axis
 bool ArduinoGEMDriver::MoveWE(TelescopeMotionWE dir, TelescopeMotionCommand command)
 {
-	char command[100];
+	char response[100];
+	char move_command[100];
 	switch (command)
 	{
 		case MOTION_START:
-			if (dir == MOTION_WEST) {
-				snprintf(command, 100, ":Mw#");
-				return serialCommand(command, command, false);
+			if (dir == DIRECTION_WEST) {
+				snprintf(move_command, 100, ":Mw#");
+				return serialCommand(move_command, response, false);
 			} else {
-				snprintf(command, 100, ":Me#");
-				return serialCommand(command, command, false);
+				snprintf(move_command, 100, ":Me#");
+				return serialCommand(move_command, response, false);
 			}
 			break;
 		case MOTION_STOP:
@@ -344,6 +394,8 @@ bool ArduinoGEMDriver::get_static_properties() {
 	IDLog("RA_gearpos_max=%d\n", RA_gearpos_max);
 	DEC_gearpos_max  = atoi(dec_response);
 	IDLog("DEC_gearpos_max=%d\n", DEC_gearpos_max);
+
+	return true;
 }
 
 // get rid of any incoming serial data (for getting in sync with the protocol)
